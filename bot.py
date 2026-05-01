@@ -21,7 +21,7 @@ from telegram.ext import (
 TOKEN = os.getenv("TOKEN")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
-REPO = "SEU_USUARIO/SEU_REPO"
+REPO = "thomasteodoro13-bit/bot_aula"
 ARQUIVO = "registros.json"
 
 CANAL_ID = -1003970171653
