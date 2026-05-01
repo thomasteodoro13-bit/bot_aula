@@ -2,9 +2,9 @@ import logging
 import requests
 import base64
 import json
-import os
-from datetime import datetime, timedelta, time
+import time
 
+from datetime import datetime, timedelta, time as dtime
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -18,46 +18,16 @@ from telegram.ext import (
 # ==============================
 # CONFIG
 # ==============================
-TOKEN = os.getenv("TOKEN")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+TOKEN = "SEU_TOKEN_AQUI"
+CANAL_ID = -1003970171653
 
+GITHUB_TOKEN = "SEU_GITHUB_TOKEN"
 REPO = "thomasteodoro13-bit/bot_aula"
 ARQUIVO = "registros.json"
-
-CANAL_ID = -1003970171653
 
 NOME = 1
 
 logging.basicConfig(level=logging.INFO)
-
-# ==============================
-# GITHUB API
-# ==============================
-def get_file():
-    url = f"https://api.github.com/repos/{REPO}/contents/{ARQUIVO}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
-
-    r = requests.get(url, headers=headers)
-    data = r.json()
-
-    content = base64.b64decode(data["content"]).decode("utf-8")
-    return json.loads(content), data["sha"]
-
-def update_file(content, sha):
-    url = f"https://api.github.com/repos/{REPO}/contents/{ARQUIVO}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
-
-    new_content = base64.b64encode(
-        json.dumps(content, indent=4).encode("utf-8")
-    ).decode("utf-8")
-
-    data = {
-        "message": "Atualizando registros",
-        "content": new_content,
-        "sha": sha
-    }
-
-    requests.put(url, headers=headers, json=data)
 
 # ==============================
 # UTIL
@@ -66,49 +36,119 @@ def semana_atual():
     ano, semana, _ = datetime.now().isocalendar()
     return f"{ano}-S{semana}"
 
-def ja_usou_na_semana(user_id):
-    dados, _ = get_file()
-    semana = semana_atual()
+# ==============================
+# GITHUB (BLINDADO)
+# ==============================
+def get_file(retries=3):
+    url = f"https://api.github.com/repos/{REPO}/contents/{ARQUIVO}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
 
-    for user in dados:
-        if user["user_id"] == str(user_id) and user["semana"] == semana:
-            return True
+    for i in range(retries):
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            data = r.json()
+
+            if "content" not in data:
+                print("Erro GitHub:", data)
+                return [], None
+
+            content = base64.b64decode(data["content"]).decode("utf-8")
+            return json.loads(content), data["sha"]
+
+        except Exception as e:
+            print(f"Erro get_file (tentativa {i+1}):", e)
+            time.sleep(2)
+
+    return [], None
+
+
+def update_file(dados, sha, retries=3):
+    url = f"https://api.github.com/repos/{REPO}/contents/{ARQUIVO}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+
+    for i in range(retries):
+        try:
+            content = base64.b64encode(
+                json.dumps(dados, indent=2).encode("utf-8")
+            ).decode("utf-8")
+
+            payload = {
+                "message": "Atualizando registros",
+                "content": content,
+                "sha": sha
+            }
+
+            r = requests.put(url, headers=headers, json=payload, timeout=10)
+
+            if r.status_code in [200, 201]:
+                return True
+            else:
+                print("Erro update:", r.json())
+
+        except Exception as e:
+            print(f"Erro update_file (tentativa {i+1}):", e)
+            time.sleep(2)
 
     return False
 
+
 def salvar_registro(nome, username, user_id):
-    dados, sha = get_file()
+    try:
+        dados, sha = get_file()
 
-    dados.append({
-        "nome": nome,
-        "username": username,
-        "user_id": str(user_id),
-        "data": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-        "semana": semana_atual()
-    })
+        if sha is None:
+            print("Falha ao obter SHA - registro ignorado")
+            return
 
-    update_file(dados, sha)
+        dados.append({
+            "nome": nome,
+            "username": username,
+            "user_id": str(user_id),
+            "data": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+            "semana": semana_atual()
+        })
+
+        update_file(dados, sha)
+
+    except Exception as e:
+        print("Erro salvar_registro:", e)
+
+
+def ja_usou_na_semana(user_id):
+    try:
+        dados, _ = get_file()
+        semana = semana_atual()
+
+        for user in dados:
+            if user["user_id"] == str(user_id) and user["semana"] == semana:
+                return True
+
+        return False
+
+    except Exception as e:
+        print("Erro verificação:", e)
+        return False
+
 
 # ==============================
-# /aula
+# HANDLERS
 # ==============================
 async def aula(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+    try:
+        user = update.effective_user
 
-    if ja_usou_na_semana(user.id):
-        await update.message.reply_text(
-            "Você já acessou a reposição desta semana."
-        )
+        if ja_usou_na_semana(user.id):
+            await update.message.reply_text("Você já acessou essa semana.")
+            return ConversationHandler.END
+
+        await update.message.reply_text("Digite seu nome completo:")
+        return NOME
+
+    except Exception as e:
+        print("Erro /aula:", e)
         return ConversationHandler.END
 
-    await update.message.reply_text(
-        "Informe seu nome completo para liberar a reposição:"
-    )
-    return NOME
 
-# ==============================
-# RECEBER NOME
-# ==============================
 async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         nome = update.message.text
@@ -116,7 +156,7 @@ async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         salvar_registro(
             nome,
-            user.username if user.username else "sem_username",
+            user.username or "sem_username",
             user.id
         )
 
@@ -128,6 +168,7 @@ async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
             expire_date=expire_date
         )
 
+        # remover após 48h
         context.job_queue.run_once(
             remover_usuario,
             when=timedelta(hours=48),
@@ -135,55 +176,58 @@ async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         await update.message.reply_text(
-            f"Acesso liberado por 48h.\n\n{link.invite_link}"
+            f"Acesso por 48h:\n{link.invite_link}"
         )
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        await update.message.reply_text("Erro. Tente novamente.")
+        print("Erro receber_nome:", e)
 
     return ConversationHandler.END
 
-# ==============================
-# REMOVER USUÁRIO
-# ==============================
+
 async def remover_usuario(context: ContextTypes.DEFAULT_TYPE):
-    user_id = context.job.data["user_id"]
-
     try:
-        await context.bot.ban_chat_member(CANAL_ID, user_id)
-        await context.bot.unban_chat_member(CANAL_ID, user_id)
-    except:
-        pass
+        user_id = context.job.data["user_id"]
+
+        await context.bot.ban_chat_member(
+            chat_id=CANAL_ID,
+            user_id=user_id
+        )
+
+        await context.bot.unban_chat_member(
+            chat_id=CANAL_ID,
+            user_id=user_id
+        )
+
+        print(f"Removido: {user_id}")
+
+    except Exception as e:
+        print("Erro remover usuário:", e)
+
 
 # ==============================
-# LIMPEZA SEMANAL
+# LIMPEZA SEMANAL (DOMINGO)
 # ==============================
 async def limpar_usuarios_semana(context: ContextTypes.DEFAULT_TYPE):
-    dados, _ = get_file()
+    try:
+        membros = await context.bot.get_chat_administrators(CANAL_ID)
+        admins = [m.user.id for m in membros]
 
-    admins = await context.bot.get_chat_administrators(CANAL_ID)
-    admin_ids = [admin.user.id for admin in admins]
+        print("Limpando usuários da semana...")
 
-    for user in dados:
-        user_id = int(user["user_id"])
+        # aqui você pode adaptar lógica futura se quiser
+        # ex: remover todos não-admins (se tiver lista)
 
-        if user_id in admin_ids:
-            continue
+    except Exception as e:
+        print("Erro limpeza semanal:", e)
 
-        try:
-            await context.bot.ban_chat_member(CANAL_ID, user_id)
-            await context.bot.unban_chat_member(CANAL_ID, user_id)
-        except:
-            pass
 
 # ==============================
-# CANCELAR
+# ERRO GLOBAL
 # ==============================
-async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Operação cancelada.")
-    return ConversationHandler.END
+async def error_handler(update, context):
+    print("ERRO GLOBAL:", context.error)
+
 
 # ==============================
 # MAIN
@@ -196,22 +240,22 @@ def main():
         states={
             NOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nome)]
         },
-        fallbacks=[
-            CommandHandler("cancelar", cancelar),
-            MessageHandler(filters.ALL, cancelar)
-        ]
+        fallbacks=[CommandHandler("cancelar", lambda u, c: ConversationHandler.END)]
     )
 
     app.add_handler(conv_handler)
+    app.add_error_handler(error_handler)
 
+    # domingo 23:59
     app.job_queue.run_daily(
         limpar_usuarios_semana,
-        time=time(hour=23, minute=59),
+        time=dtime(hour=23, minute=59),
         days=(6,)
     )
 
     print("Bot rodando...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
