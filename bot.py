@@ -18,10 +18,10 @@ from telegram.ext import (
 # ==============================
 # CONFIG
 # ==============================
-TOKEN = "SEU_TOKEN_AQUI"
+TOKEN = "8740172613:AAH02ofOYyz6bxas1iAVEaf7tWVx8xV-WPc"
 CANAL_ID = -1003970171653
 
-GITHUB_TOKEN = "SEU_GITHUB_TOKEN"
+GITHUB_TOKEN = "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"
 REPO = "thomasteodoro13-bit/bot_aula"
 ARQUIVO = "registros.json"
 
